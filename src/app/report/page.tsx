@@ -144,9 +144,14 @@ export default function ReportPage() {
       const result = await model.generateContent([prompt, ...imageParts]);
       const response = await result.response;
       const text = response.text();
+      let jsonText = text.trim();
+      jsonText = jsonText
+        .replace(/^```(?:json)?\s*/, "")
+        .replace(/```$/, "")
+        .trim();
 
       try {
-        const parsedResult = JSON.parse(text);
+        const parsedResult = JSON.parse(jsonText);
         if (
           parsedResult.wasteType &&
           parsedResult.quantity &&
@@ -164,7 +169,7 @@ export default function ReportPage() {
           setVerificationStatus("failure");
         }
       } catch (error) {
-        console.error("Failed to parse JSON response:", text);
+        console.error("JSON parse failed on cleaned text:", jsonText, error);
         setVerificationStatus("failure");
       }
     } catch (error) {

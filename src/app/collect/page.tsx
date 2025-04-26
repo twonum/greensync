@@ -143,7 +143,9 @@ export default function CollectPage() {
     return dataUrl.split(",")[1];
   };
 
+  // Improved handleVerify for CollectPage component with robust toast error handling
   const handleVerify = async () => {
+    // Ensure required data is present
     if (!selectedTask || !verificationImage || !user) {
       toast.error("Missing required information for verification.");
       return;
@@ -152,85 +154,77 @@ export default function CollectPage() {
     setVerificationStatus("verifying");
 
     try {
+      // Initialize Gemini AI
       const genAI = new GoogleGenerativeAI(geminiApiKey!);
       const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
+      // Extract base64 payload
       const base64Data = readFileAsBase64(verificationImage);
-
       const imageParts = [
-        {
-          inlineData: {
-            data: base64Data,
-            mimeType: "image/jpeg", // Adjust this if you know the exact type
-          },
-        },
+        { inlineData: { data: base64Data, mimeType: "image/jpeg" } },
       ];
 
-      const prompt = `You are an expert in waste management and recycling. Analyze this image and provide:
-        1. Confirm if the waste type matches: ${selectedTask.wasteType}
-        2. Estimate if the quantity matches: ${selectedTask.amount}
-        3. Your confidence level in this assessment (as a percentage)
-        
-        Respond in JSON format like this:
-        {
-          "wasteTypeMatch": true/false,
-          "quantityMatch": true/false,
-          "confidence": confidence level as a number between 0 and 1
-        }`;
+      // Strict prompt: only raw JSON
+      const prompt =
+        `You are an expert in waste management and recycling.\n` +
+        `Confirm if wasteType matches \"${selectedTask.wasteType}\" and quantity matches \"${selectedTask.amount}\".\n` +
+        `Return ONLY raw JSON with keys: wasteTypeMatch (boolean), quantityMatch (boolean), confidence (0–1).`;
 
+      // Send to model
       const result = await model.generateContent([prompt, ...imageParts]);
-      const response = await result.response;
-      const text = response.text();
+      const rawText = await (await result.response).text();
 
+      // Strip markdown fences if any
+      const jsonText = rawText
+        .trim()
+        .replace(/^```(?:json)?/, "")
+        .replace(/```$/, "")
+        .trim();
+
+      // Parse JSON with inner try/catch for parse errors
+      let parsed;
       try {
-        const parsedResult = JSON.parse(text);
-        setVerificationResult({
-          wasteTypeMatch: parsedResult.wasteTypeMatch,
-          quantityMatch: parsedResult.quantityMatch,
-          confidence: parsedResult.confidence,
-        });
-        setVerificationStatus("success");
-
-        if (
-          parsedResult.wasteTypeMatch &&
-          parsedResult.quantityMatch &&
-          parsedResult.confidence > 0.7
-        ) {
-          await handleStatusChange(selectedTask.id, "verified");
-          const earnedReward = Math.floor(Math.random() * 50) + 10; // Random reward between 10 and 59
-
-          // Save the reward
-          await saveReward(user.id, earnedReward);
-
-          // Save the collected waste
-          await saveCollectedWaste(selectedTask.id, user.id, parsedResult);
-
-          setReward(earnedReward);
-          toast.success(
-            `Verification successful! You earned ${earnedReward} tokens!`,
-            {
-              duration: 5000,
-              position: "top-center",
-            }
-          );
-        } else {
-          toast.error(
-            "Verification failed. The collected waste does not match the reported waste.",
-            {
-              duration: 5000,
-              position: "top-center",
-            }
-          );
-        }
-      } catch (error) {
-        console.log(error);
-
-        console.error("Failed to parse JSON response:", text);
+        parsed = JSON.parse(jsonText);
+      } catch (parseErr) {
+        console.error("JSON parse error:", parseErr, jsonText);
+        toast.error("Could not parse AI response. Please try again.");
         setVerificationStatus("failure");
+        return;
       }
-    } catch (error) {
-      console.error("Error verifying waste:", error);
+
+      // Set results state
+      setVerificationResult(parsed);
+      setVerificationStatus("success");
+
+      // Only mark verified if type matches AND (quantity matches OR high confidence)
+      if (
+        parsed.wasteTypeMatch &&
+        (parsed.quantityMatch || parsed.confidence >= 0.8)
+      ) {
+        await handleStatusChange(selectedTask.id, "verified");
+
+        const earnedTokens = Math.floor(Math.random() * 50) + 10;
+        await saveReward(user.id, earnedTokens);
+        await saveCollectedWaste(selectedTask.id, user.id, parsed);
+
+        setReward(earnedTokens);
+        toast.success(
+          `Verification successful! You earned ${earnedTokens} tokens!`,
+          { duration: 5000, position: "top-center" }
+        );
+      } else {
+        toast.error(
+          "Verification failed: waste type or quantity did not match.",
+          { duration: 5000, position: "top-center" }
+        );
+      }
+    } catch (err) {
+      console.error("Error verifying waste:", err);
       setVerificationStatus("failure");
+      toast.error("An error occurred during verification. Please try again.", {
+        duration: 5000,
+        position: "top-center",
+      });
     }
   };
 
